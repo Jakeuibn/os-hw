@@ -24,6 +24,9 @@ pub use task::{TaskControlBlock, TaskStatus};
 
 pub use context::TaskContext;
 
+use crate::syscall::SyscallKind;
+use crate::mm::{VirtAddr, check_vpn_range_no_entry, check_vpn_range_all_entry, frame_avalible, MapPermission};
+
 /// The task manager, where all the tasks are managed.
 ///
 /// Functions implemented on `TaskManager` deals with all task state transitions
@@ -103,6 +106,57 @@ impl TaskManager {
         inner.tasks[cur].task_status = TaskStatus::Exited;
     }
 
+    /// trace the syscall count of the current task
+    fn trace_current_syscall_count(&self, syscall_id: usize) {
+        let mut inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        inner.tasks[current].syscall_count[SyscallKind::from_syscall_number(syscall_id).unwrap().as_index()] += 1;
+    }
+
+    /// get syscall count of current task
+    fn get_current_syscall_count(&self, syscall_id: usize) -> usize {
+        let inner = TASK_MANAGER.inner.exclusive_access();
+        let current = inner.current_task;
+        inner.tasks[current].syscall_count[SyscallKind::from_syscall_number(syscall_id).unwrap().as_index()]
+    }
+
+    /// for sys_mmap: alloc frames and map them to the user space
+    fn insert_mmap_area(&self, start: usize, len: usize, prot: usize) -> isize {
+        if start % 4096 != 0 || (prot & !0x7 != 0) || (prot & 0x7 == 0) {
+            return -1;
+        }
+        let page_count = (len + 4095) / 4096;
+        if frame_avalible() < page_count {
+            return -1;
+        }
+        if !check_vpn_range_no_entry(current_user_token(), VirtAddr::from(start), VirtAddr::from(start + len)) {
+            return -1;
+        }
+        let mut inner = TASK_MANAGER.inner.exclusive_access();
+        let current = inner.current_task;
+        let perm = (prot << 1) | MapPermission::U.bits() as usize;
+        inner.tasks[current].memory_set.insert_framed_area(
+            VirtAddr::from(start),
+            VirtAddr::from(start + len),
+            MapPermission::from_bits(perm as u8).unwrap(),
+        );
+        0
+    }
+
+    /// for sys_munmap: unmap the mmap area and dealloc frames
+    fn delete_mmap_area(&self, start: usize, len: usize) -> isize {
+        if start % 4096 != 0 || len == 0 {
+            return -1;
+        }
+        if !check_vpn_range_all_entry(current_user_token(), VirtAddr::from(start), VirtAddr::from(start + len)) {
+            return -1;
+        }
+        let mut inner = TASK_MANAGER.inner.exclusive_access();
+        let current = inner.current_task;
+        inner.tasks[current].memory_set.remove_framed_area(VirtAddr::from(start), VirtAddr::from(start + len));
+        0
+    }
+
     /// Find next task to run and return task id.
     ///
     /// In this case, we only return the first `Ready` task in task list.
@@ -174,6 +228,26 @@ fn mark_current_suspended() {
 /// Change the status of current `Running` task into `Exited`.
 fn mark_current_exited() {
     TASK_MANAGER.mark_current_exited();
+}
+
+/// trace the syscall count of the current task
+pub fn trace_current_syscall_count(syscall_id: usize) {
+    TASK_MANAGER.trace_current_syscall_count(syscall_id);
+}
+
+/// get syscall count of current task
+pub fn get_current_syscall_count(syscall_id: usize) -> usize {
+    TASK_MANAGER.get_current_syscall_count(syscall_id)
+}
+
+/// for sys_mmap: alloc frames and map them to the user space
+pub fn insert_mmap_area(start: usize, len: usize, prot: usize) -> isize {
+    TASK_MANAGER.insert_mmap_area(start, len, prot)
+}
+
+/// for sys_munmap: unmap the mmap area and dealloc frames
+pub fn delete_mmap_area(start: usize, len: usize) -> isize {
+    TASK_MANAGER.delete_mmap_area(start, len)
 }
 
 /// Suspend the current 'Running' task and run the next task in task list.

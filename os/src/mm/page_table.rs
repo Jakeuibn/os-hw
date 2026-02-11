@@ -70,6 +70,10 @@ impl PageTableEntry {
     pub fn executable(&self) -> bool {
         (self.flags() & PTEFlags::X) != PTEFlags::empty()
     }
+    /// The page pointered by page table entry is user accessible?
+    pub fn user(&self) -> bool {
+        (self.flags() & PTEFlags::U) != PTEFlags::empty()
+    }
 }
 
 /// page table structure
@@ -178,4 +182,71 @@ pub fn translated_byte_buffer(token: usize, ptr: *const u8, len: usize) -> Vec<&
         start = end_va.into();
     }
     v
+}
+
+/// Translate&Read a single ptr to a mutable u8 through page table
+/// The user must be able to access and read it, otherwise -1 is returned.
+pub fn read_translated_byte(token: usize, ptr: *const u8) -> isize {
+    let page_table = PageTable::from_token(token);
+    let va = VirtAddr::from(ptr as usize);
+    let vpn = va.floor();
+    if let Some(pte) = page_table.translate(vpn) {
+        if !pte.user() || !pte.readable() {
+            return -1;
+        }
+        let ppn = pte.ppn();
+        ppn.get_bytes_array()[va.page_offset()] as isize
+    } else {
+        return -1;
+    }
+}
+
+/// Translate&Write data to a mutable u8 through page table
+/// The user must be able to access and write it, otherwise -1 is returned.
+pub fn write_translated_byte(token: usize, ptr: *mut u8, value: u8) -> isize {
+    let page_table = PageTable::from_token(token);
+    let va = VirtAddr::from(ptr as usize);
+    let vpn = va.floor();
+    if let Some(pte) = page_table.translate(vpn) {
+        if !pte.user() || !pte.writable() {
+            return -1;
+        }
+        let ppn = pte.ppn();
+        ppn.get_bytes_array()[va.page_offset()] = value;
+        0
+    } else {
+        return -1;
+    }
+}
+
+/// check that no page table entry in the range [start_va, end_va) is valid
+pub fn check_vpn_range_no_entry(token: usize, start_va: VirtAddr, end_va: VirtAddr) -> bool {
+    let page_table = PageTable::from_token(token);
+    let mut vpn = start_va.floor();
+    while VirtAddr::from(vpn) < end_va {
+        if let Some(pte) = page_table.translate(vpn) {
+            if pte.is_valid() {
+                return false;
+            }
+        }
+        vpn.step();
+    }
+    true
+}
+
+/// check that all page table entries in the range [start_va, end_va) are valid
+pub fn check_vpn_range_all_entry(token: usize, start_va: VirtAddr, end_va: VirtAddr) -> bool {
+    let page_table = PageTable::from_token(token);
+    let mut vpn = start_va.floor();
+    while VirtAddr::from(vpn) < end_va {
+        if let Some(pte) = page_table.translate(vpn) {
+            if !pte.is_valid() {
+                return false;
+            }
+        } else {
+            return false;
+        }
+        vpn.step();
+    }
+    true
 }
