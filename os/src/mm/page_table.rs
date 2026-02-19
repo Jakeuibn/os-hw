@@ -213,3 +213,35 @@ pub fn translated_refmut<T>(token: usize, ptr: *mut T) -> &'static mut T {
         .unwrap()
         .get_mut()
 }
+
+/// check that no page table entry in the range [start_va, end_va) is valid
+pub fn check_vpn_range_no_entry(token: usize, start_va: VirtAddr, end_va: VirtAddr) -> bool {
+    let page_table = PageTable::from_token(token);
+    let mut vpn = start_va.floor();
+    while VirtAddr::from(vpn) < end_va {
+        if let Some(pte) = page_table.translate(vpn) {
+            if pte.is_valid() {
+                return false;
+            }
+        }
+        vpn.step();
+    }
+    true
+}
+
+/// check that all page table entries in the range [start_va, end_va) are valid
+pub fn check_vpn_range_all_entry(token: usize, start_va: VirtAddr, end_va: VirtAddr) -> bool {
+    let page_table = PageTable::from_token(token);
+    let mut vpn = start_va.floor();
+    while VirtAddr::from(vpn) < end_va {
+        if let Some(pte) = page_table.translate(vpn) {
+            if !pte.is_valid() {
+                return false;
+            }
+        } else {
+            return false;
+        }
+        vpn.step();
+    }
+    true
+}

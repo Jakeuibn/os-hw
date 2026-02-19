@@ -22,6 +22,7 @@ mod switch;
 mod task;
 
 use crate::loader::get_app_data_by_name;
+use crate::mm::{VirtAddr, check_vpn_range_no_entry, check_vpn_range_all_entry, frame_avalible, MapPermission};
 use alloc::sync::Arc;
 use lazy_static::*;
 pub use manager::{fetch_task, TaskManager};
@@ -99,6 +100,43 @@ pub fn exit_current_and_run_next(exit_code: i32) {
     // we do not have to save task context
     let mut _unused = TaskContext::zero_init();
     schedule(&mut _unused as *mut _);
+}
+
+/// for sys_mmap: alloc frames and map them to the user space
+pub fn insert_mmap_area(start: usize, len: usize, prot: usize) -> isize {
+    if start % 4096 != 0 || (prot & !0x7 != 0) || (prot & 0x7 == 0) {
+        return -1;
+    }
+    let page_count = (len + 4095) / 4096;
+    if frame_avalible() < page_count {
+        return -1;
+    }
+    if !check_vpn_range_no_entry(current_user_token(), VirtAddr::from(start), VirtAddr::from(start + len)) {
+        return -1;
+    }
+    let task = current_task().unwrap();
+    let mut inner = task.inner_exclusive_access();
+    let perm = (prot << 1) | MapPermission::U.bits() as usize;
+    inner.memory_set.insert_framed_area(
+        VirtAddr::from(start),
+        VirtAddr::from(start + len),
+        MapPermission::from_bits(perm as u8).unwrap(),
+    );
+    0
+}
+
+/// for sys_munmap: unmap the mmap area and dealloc frames
+pub fn delete_mmap_area(start: usize, len: usize) -> isize {
+    if start % 4096 != 0 || len == 0 {
+        return -1;
+    }
+    if !check_vpn_range_all_entry(current_user_token(), VirtAddr::from(start), VirtAddr::from(start + len)) {
+        return -1;
+    }
+    let task = current_task().unwrap();
+    let mut inner = task.inner_exclusive_access();
+    inner.memory_set.remove_framed_area(VirtAddr::from(start), VirtAddr::from(start + len));
+    0
 }
 
 lazy_static! {
