@@ -6,7 +6,7 @@
 
 use super::__switch;
 use super::{fetch_task, TaskStatus};
-use super::{TaskContext, TaskControlBlock};
+use super::{TaskContext, TaskControlBlock, Pass};
 use crate::sync::UPSafeCell;
 use crate::trap::TrapContext;
 use alloc::sync::Arc;
@@ -19,6 +19,9 @@ pub struct Processor {
 
     ///The basic control flow of each core, helping to select and switch process
     idle_task_cx: TaskContext,
+
+    ///The minimum pass of all ready and running processes
+    min_pass: Pass,
 }
 
 impl Processor {
@@ -27,6 +30,7 @@ impl Processor {
         Self {
             current: None,
             idle_task_cx: TaskContext::zero_init(),
+            min_pass: Pass::new(0),
         }
     }
 
@@ -59,6 +63,9 @@ pub fn run_tasks() {
             let idle_task_cx_ptr = processor.get_idle_task_cx_ptr();
             // access coming task TCB exclusively
             let mut task_inner = task.inner_exclusive_access();
+            processor.min_pass = task_inner.pass;
+            let priority = task_inner.priority;
+            task_inner.pass.add_stride(priority);
             let next_task_cx_ptr = &task_inner.task_cx as *const TaskContext;
             task_inner.task_status = TaskStatus::Running;
             // release coming task_inner manually
@@ -108,4 +115,9 @@ pub fn schedule(switched_task_cx_ptr: *mut TaskContext) {
     unsafe {
         __switch(switched_task_cx_ptr, idle_task_cx_ptr);
     }
+}
+
+///Get the minimum pass of all ready and running processes
+pub fn get_min_pass() -> Pass {
+    PROCESSOR.exclusive_access().min_pass
 }
