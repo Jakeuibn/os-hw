@@ -78,6 +78,55 @@ impl MemorySet {
             self.areas.remove(idx);
         }
     }
+    /// remove a sequence of va, one MapArea may be splited in two
+    pub fn remove_framed_area(&mut self, start_va: VirtAddr, end_va: VirtAddr) {
+        let start_vpn: VirtPageNum = start_va.floor();
+        let end_vpn: VirtPageNum = end_va.ceil();
+        let mut i = 0;
+        while i < self.areas.len() {
+            let area = &mut self.areas[i];
+            if area.vpn_range.get_end() <= start_vpn || area.vpn_range.get_start() >= end_vpn {
+                // no overlap
+                i += 1;
+                continue;
+            }
+            if area.vpn_range.get_start() < start_vpn && area.vpn_range.get_end() > end_vpn {
+                // split into two
+                let new_area = MapArea::new(
+                    end_vpn.into(),
+                    area.vpn_range.get_end().into(),
+                    area.map_type,
+                    area.map_perm,
+                );
+                for vpn in VPNRange::new(start_vpn, end_vpn) {
+                    area.unmap_one(&mut self.page_table, vpn)
+                }
+                area.vpn_range = VPNRange::new(area.vpn_range.get_start(), start_vpn);
+                self.areas.insert(i + 1, new_area);
+                i += 2;
+            } else if area.vpn_range.get_start() < start_vpn {
+                // shrink to left
+                for vpn in VPNRange::new(start_vpn, area.vpn_range.get_end()) {
+                    area.unmap_one(&mut self.page_table, vpn)
+                }
+                area.vpn_range = VPNRange::new(area.vpn_range.get_start(), start_vpn);
+                i += 1;
+            } else if area.vpn_range.get_end() > end_vpn {
+                // shrink to right
+                for vpn in VPNRange::new(area.vpn_range.get_start(), end_vpn) {
+                    area.unmap_one(&mut self.page_table, vpn)
+                }
+                area.vpn_range = VPNRange::new(end_vpn, area.vpn_range.get_end());
+                i += 1;
+            } else {
+                // remove whole area
+                for vpn in area.vpn_range.clone() {
+                    area.unmap_one(&mut self.page_table, vpn)
+                }
+                self.areas.remove(i);
+            }
+        }
+    }
     /// Add a new MapArea into this MemorySet.
     /// Assuming that there are no conflicts in the virtual address
     /// space.
