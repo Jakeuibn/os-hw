@@ -6,7 +6,7 @@ use core::fmt::{Debug, Formatter, Result};
 /// Magic number for sanity check
 const EFS_MAGIC: u32 = 0x3b800001;
 /// The max number of direct inodes
-const INODE_DIRECT_COUNT: usize = 28;
+const INODE_DIRECT_COUNT: usize = 27;
 /// The max length of inode name
 const NAME_LENGTH_LIMIT: usize = 27;
 /// The max number of indirect1 inodes
@@ -85,7 +85,8 @@ pub struct DiskInode {
     pub direct: [u32; INODE_DIRECT_COUNT],
     pub indirect1: u32,
     pub indirect2: u32,
-    type_: DiskInodeType,
+    pub type_: DiskInodeType,
+    pub nlink: u32,
 }
 
 impl DiskInode {
@@ -97,6 +98,7 @@ impl DiskInode {
         self.indirect1 = 0;
         self.indirect2 = 0;
         self.type_ = type_;
+        self.nlink = 1;
     }
     /// Whether this inode is a directory
     pub fn is_dir(&self) -> bool {
@@ -233,6 +235,85 @@ impl DiskInode {
                     }
                 }
             });
+    }
+    /// Decrease the size of current disk inode and return blocks that should be deallocated.
+    /// We will clear the block contents to zero later.
+    pub fn decrease_size(
+        &mut self,
+        new_size: u32,
+        block_device: &Arc<dyn BlockDevice>,
+    ) -> Vec<u32> {
+        let mut v: Vec<u32> = Vec::new();
+        let mut current_blocks = self.data_blocks();
+        self.size = new_size;
+        let total_blocks = self.data_blocks();
+        // dealloc indirect2
+        if current_blocks > INDIRECT1_BOUND as u32 {
+            // delete indirect2 from (a0, b0) -> (a1, b1)
+            let a0 = (total_blocks.max(INDIRECT1_BOUND as u32) as usize - INDIRECT1_BOUND) / INODE_INDIRECT1_COUNT;
+            let b0 = (total_blocks.max(INDIRECT1_BOUND as u32) as usize - INDIRECT1_BOUND) % INODE_INDIRECT1_COUNT;
+            let mut a1 = (current_blocks as usize - INDIRECT1_BOUND) / INODE_INDIRECT1_COUNT;
+            let mut b1 = (current_blocks as usize - INDIRECT1_BOUND) % INODE_INDIRECT1_COUNT;
+            // dealloc low-level indirect1
+            get_block_cache(self.indirect2 as usize, Arc::clone(block_device))
+                .lock()
+                .modify(0, |indirect2: &mut IndirectBlock| {
+                    while a1 != usize::MAX && (a0 < a1 || (a0 == a1 && b0 < b1)) {
+                        // delete current
+                        get_block_cache(indirect2[a0] as usize, Arc::clone(block_device))
+                            .lock()
+                            .modify(0, |indirect1: &mut IndirectBlock| {
+                                v.push(indirect1[b0]);
+                                indirect1[b0] = 0;
+                            });
+                        if b0 == 0 {
+                            v.push(indirect2[a0]);
+                            indirect2[a0] = 0;
+                        }
+                        // move to next
+                        b1 -= 1;
+                        if b1 == usize::MAX {
+                            b1 = INODE_INDIRECT1_COUNT - 1;
+                            a1 -= 1;
+                        }
+                    }
+                });
+            // dealloc indirect2
+            if total_blocks <= INDIRECT1_BOUND as u32 {
+                v.push(self.indirect2);
+                self.indirect2 = 0;
+                current_blocks = INDIRECT1_BOUND as u32;
+            } else {
+                return v;
+            }
+        }
+        if current_blocks > INODE_DIRECT_COUNT as u32 {
+            // delete indirect1
+            get_block_cache(self.indirect1 as usize, Arc::clone(block_device))
+                .lock()
+                .modify(0, |indirect1: &mut IndirectBlock| {
+                    while current_blocks > total_blocks.max(INODE_DIRECT_COUNT as u32) {
+                        current_blocks -= 1;
+                        v.push(indirect1[current_blocks as usize]);
+                        indirect1[current_blocks as usize] = 0;
+                    }
+                });
+            // dealloc indirect1
+            if total_blocks <= INODE_DIRECT_COUNT as u32 {
+                v.push(self.indirect1);
+                self.indirect1 = 0;
+                current_blocks = INODE_DIRECT_COUNT as u32;
+            } else {
+                return v;
+            }
+        }
+        // delete direct
+        while current_blocks > total_blocks {
+            current_blocks -= 1;
+            v.push(self.direct[current_blocks as usize]);
+            self.direct[current_blocks as usize] = 0;
+        }
+        v
     }
 
     /// Clear size to zero and return blocks that should be deallocated.

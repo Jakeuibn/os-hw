@@ -218,6 +218,22 @@ pub fn translated_refmut<T>(token: usize, ptr: *mut T) -> &'static mut T {
         .unwrap()
         .get_mut()
 }
+/// Write value T into the ptr through page table
+pub fn translated_write<T>(token: usize, ptr: *mut T, val: T) {
+    let bytes = unsafe {
+        core::slice::from_raw_parts(&val as *const T as *const u8, core::mem::size_of::<T>())
+    };
+    let buffers = translated_byte_buffer(token, ptr as *mut u8, core::mem::size_of::<T>());
+    let mut bytes_written = 0;
+    for buffer in buffers {
+        let len = buffer.len().min(bytes.len() - bytes_written);
+        buffer[..len].copy_from_slice(&bytes[bytes_written..bytes_written + len]);
+        bytes_written += len;
+        if bytes_written >= bytes.len() {
+            break;
+        }
+    }
+}
 
 /// An abstraction over a buffer passed from user space to kernel space
 pub struct UserBuffer {

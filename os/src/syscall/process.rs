@@ -11,7 +11,7 @@ use crate::{
         insert_mmap_area, delete_mmap_area,
     },
     timer::get_time_us,
-    mm::translated_byte_buffer,
+    mm::translated_write,
 };
 
 #[repr(C)]
@@ -115,19 +115,7 @@ pub fn sys_get_time(ts: *mut TimeVal, _tz: usize) -> isize {
         sec: us / 1_000_000,
         usec: us % 1_000_000,
     };
-    let bytes = unsafe {
-        core::slice::from_raw_parts(&tv as *const TimeVal as *const u8, core::mem::size_of::<TimeVal>())
-    };
-    let buffers = translated_byte_buffer(current_user_token(), ts as *mut u8, core::mem::size_of::<TimeVal>());
-    let mut bytes_written = 0;
-    for buffer in buffers {
-        let len = buffer.len().min(bytes.len() - bytes_written);
-        buffer[..len].copy_from_slice(&bytes[bytes_written..bytes_written + len]);
-        bytes_written += len;
-        if bytes_written >= bytes.len() {
-            break;
-        }
-    }
+    translated_write(current_user_token(), ts, tv);
     0
 }
 
