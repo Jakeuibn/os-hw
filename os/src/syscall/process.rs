@@ -189,13 +189,14 @@ pub fn sys_munmap(_start: usize, _len: usize) -> isize {
 }
 
 /// change data segment size
-// pub fn sys_sbrk(size: i32) -> isize {
-//     trace!("kernel:pid[{}] sys_sbrk", current_task().unwrap().process.upgrade().unwrap().getpid());
-//     if let Some(old_brk) = current_task().unwrap().change_program_brk(size) {
-//         old_brk as isize
-//     } else {
-//     -1
-// }
+pub fn sys_sbrk(size: i32) -> isize {
+    trace!("kernel:pid[{}] sys_sbrk", current_task().unwrap().process.upgrade().unwrap().getpid());
+    if let Some(old_brk) = current_process().change_program_brk(size) {
+        old_brk as isize
+    } else {
+        -1
+    }
+}
 
 /// spawn syscall
 /// YOUR JOB: Implement spawn.
