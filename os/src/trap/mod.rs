@@ -15,6 +15,7 @@
 mod context;
 
 use crate::config::{TRAMPOLINE, TRAP_CONTEXT_BASE};
+use crate::mm::PageTable;
 use crate::syscall::syscall;
 use crate::task::{
     current_trap_cx, current_user_token, exit_current_and_run_next, suspend_current_and_run_next,
@@ -77,6 +78,7 @@ pub fn trap_handler() -> ! {
         | Trap::Exception(Exception::LoadFault)
         | Trap::Exception(Exception::LoadPageFault) => {
             println!("[kernel] PageFault in application, bad addr = {:#x}, bad instruction = {:#x}, kernel killed it.", stval, cx.sepc);
+            PageTable::dump_from_token(current_user_token());
             exit_current_and_run_next();
         }
         Trap::Exception(Exception::IllegalInstruction) => {

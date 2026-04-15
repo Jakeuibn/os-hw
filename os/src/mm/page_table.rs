@@ -159,6 +159,78 @@ impl PageTable {
     pub fn token(&self) -> usize {
         8usize << 60 | self.root_ppn.0
     }
+
+    /// Dump current Sv39 page table for debugging.
+    pub fn dump(&self) {
+        println!(
+            "[pt] ===== Sv39 page table dump start, root ppn = {:#x} =====",
+            self.root_ppn.0
+        );
+        dump_page_table_level(self.root_ppn, 2, 0);
+        println!("[pt] ===== Sv39 page table dump end =====");
+    }
+
+    /// Dump an existing page table by SATP token.
+    pub fn dump_from_token(token: usize) {
+        Self::from_token(token).dump();
+    }
+}
+
+fn flag_char(cond: bool, c: char) -> char {
+    if cond {
+        c
+    } else {
+        '-'
+    }
+}
+
+fn dump_flags(flags: PTEFlags) {
+    println!(
+        "{}{}{}{}{}{}{}{}",
+        flag_char(flags.contains(PTEFlags::V), 'V'),
+        flag_char(flags.contains(PTEFlags::R), 'R'),
+        flag_char(flags.contains(PTEFlags::W), 'W'),
+        flag_char(flags.contains(PTEFlags::X), 'X'),
+        flag_char(flags.contains(PTEFlags::U), 'U'),
+        flag_char(flags.contains(PTEFlags::G), 'G'),
+        flag_char(flags.contains(PTEFlags::A), 'A'),
+        flag_char(flags.contains(PTEFlags::D), 'D')
+    );
+}
+
+fn dump_page_table_level(table_ppn: PhysPageNum, level: usize, vpn_prefix: usize) {
+    for (idx, pte) in table_ppn.get_pte_array().iter().enumerate() {
+        if !pte.is_valid() {
+            continue;
+        }
+
+        let flags = pte.flags();
+        let child_ppn = pte.ppn();
+        let next_vpn_prefix = vpn_prefix | (idx << (level * 9));
+        let is_leaf = pte.readable() || pte.writable() || pte.executable();
+
+        print!(
+            "[pt] L{} idx={:#03x} pte={:#018x} ppn={:#x} flags=",
+            level, idx, pte.bits, child_ppn.0
+        );
+        dump_flags(flags);
+
+        if is_leaf {
+            let va_start = next_vpn_prefix << 12;
+            let size = 1usize << (12 + level * 9);
+            let va_end = va_start + size;
+            let pa_start = child_ppn.0 << 12;
+            let pa_end = pa_start + size;
+            println!(
+                "[pt]   -> VA [{:#x}, {:#x}) -> PA [{:#x}, {:#x})",
+                va_start, va_end, pa_start, pa_end
+            );
+        } else if level > 0 {
+            dump_page_table_level(child_ppn, level - 1, next_vpn_prefix);
+        } else {
+            println!("[pt]   -> warning: non-leaf entry at level 0");
+        }
+    }
 }
 
 /// Translate&Copy a ptr[u8] array with LENGTH len to a mutable u8 Vec through page table
